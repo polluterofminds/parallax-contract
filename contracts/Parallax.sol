@@ -286,11 +286,6 @@ contract Parallax is Ownable, ReentrancyGuard {
      * @dev Cancel current case and return all player deposits (owner only)
      */
     function cancelCase() external onlyOwner nonReentrant {
-        require(
-            caseStatus[currentCase] == CaseStatus.Pending,
-            "Can only cancel pending cases"
-        );
-
         // Return funds to all players
         for (uint i = 0; i < casePlayers.length; i++) {
             address player = casePlayers[i];
