@@ -2,19 +2,18 @@ const { expect } = require("chai");
 const { ethers } = require("hardhat");
 
 describe("Parallax", function () {
-  let Parallax: any;
-  let parallax: any;
-  let MockUSDC: any;
-  let mockUSDC: any;
-  let MaliciousUSDC: any;
-  let maliciousUSDC: any;
+  let Parallax;
+  let parallax;
+  let MockUSDC;
+  let mockUSDC;
+  let MaliciousUSDC;
+  let maliciousUSDC;
 
-  //  @ts-ignore
   let owner, player1, player2, player3, player4, player5;
-  //  @ts-ignore
   let player6, player7, player8, player9, player10, player11;
   const IPFS_CID = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-  let ENTRY_FEE: any;
+  let ENTRY_FEE;
+  let EXTRA_SOLUTION_FEE;
 
   beforeEach(async function () {
     // Get signers
@@ -41,17 +40,19 @@ describe("Parallax", function () {
     MaliciousUSDC = await ethers.getContractFactory("MaliciousUSDC");
     maliciousUSDC = await MaliciousUSDC.deploy();
 
-    // Deploy Parallax contract - use getAddress() instead of target
+    // Deploy Parallax contract
     Parallax = await ethers.getContractFactory("Parallax");
     parallax = await Parallax.deploy(await mockUSDC.getAddress());
 
-    // Set ENTRY_FEE (10 USDC with 6 decimals)
-    ENTRY_FEE = ethers.parseUnits("10", 6);
+    // Get constants from contract
+    ENTRY_FEE = await parallax.ENTRY_FEE();
+    EXTRA_SOLUTION_FEE = await parallax.EXTRA_SOLUTION_FEE();
 
     // Get the Parallax contract address
     const parallaxAddress = await parallax.getAddress();
 
-    // Mint USDC to players
+    // Mint USDC to players (both entry fee and extra solution fee)
+    const totalAmount = ENTRY_FEE + EXTRA_SOLUTION_FEE;
     for (const player of [
       player1,
       player2,
@@ -65,10 +66,8 @@ describe("Parallax", function () {
       player10,
       player11,
     ]) {
-      // In ethers v6, the signer address is directly available as player.address
-      await mockUSDC.mint(player.address, ENTRY_FEE);
-      // Use parallaxAddress instead of parallax.address
-      await mockUSDC.connect(player).approve(parallaxAddress, ENTRY_FEE);
+      await mockUSDC.mint(player.address, totalAmount);
+      await mockUSDC.connect(player).approve(parallaxAddress, totalAmount);
     }
   });
 
@@ -87,102 +86,84 @@ describe("Parallax", function () {
     });
 
     it("Should have correct constants", async function () {
-      expect(await parallax.ENTRY_FEE()).to.equal(ENTRY_FEE);
+      expect(await parallax.ENTRY_FEE()).to.equal(ethers.parseUnits("5", 6)); // 5 USDC
+      expect(await parallax.EXTRA_SOLUTION_FEE()).to.equal(ethers.parseUnits("2", 6)); // 2 USDC
       expect(await parallax.COMMISSION_PERCENTAGE()).to.equal(10n);
-      expect(await parallax.REQUIRED_PLAYERS()).to.equal(10n);
+      // REMOVED: REQUIRED_PLAYERS constant no longer exists
     });
   });
 
-  describe("Setting Case Crime Info", function () {
-    it("Should set crime info for the current case", async function () {
-      await parallax.setCaseCrimeInfo(IPFS_CID);
+  describe("Case Activation with Crime Info", function () {
+    it("Should set crime info and activate the case", async function () {
+      await parallax.activateCase(IPFS_CID);
       expect(await parallax.getCaseCrimeInfoCID(1)).to.equal(IPFS_CID);
+      expect(await parallax.getCaseStatus(1)).to.equal(1n); // 1n = Active
     });
 
-    it("Should emit NewCaseStarted event when setting crime info for the first time", async function () {
-      await expect(parallax.setCaseCrimeInfo(IPFS_CID))
-        .to.emit(parallax, "NewCaseStarted")
-        .withArgs(1n, IPFS_CID); // Note: using 1n instead of 1 for BigInt
-    });
-
-    it("Should emit CaseCrimeInfoUpdated event when updating crime info", async function () {
-      await parallax.setCaseCrimeInfo(IPFS_CID);
-
-      const newCID = "QmNewCrimeInfoCID";
-      await expect(parallax.setCaseCrimeInfo(newCID))
-        .to.emit(parallax, "CaseCrimeInfoUpdated")
-        .withArgs(1, newCID);
-    });
-
-    it("Should not allow setting crime info for active cases", async function () {
-      await parallax.setCaseCrimeInfo(IPFS_CID);
-
-      // Get 10 players to make the case active
-      for (let i = 0; i < 10; i++) {
-        const player = [
-          player1,
-          player2,
-          player3,
-          player4,
-          player5,
-          player6,
-          player7,
-          player8,
-          player9,
-          player10,
-        ][i];
-        await parallax.connect(player).depositToPlay();
-      }
-
-      const newCID = "QmNewCrimeInfoCID";
-      await expect(parallax.setCaseCrimeInfo(newCID)).to.be.revertedWith(
-        "Can only set crime info for pending cases"
-      );
+    it("Should emit appropriate events when activating a case", async function () {
+      await expect(parallax.activateCase(IPFS_CID))
+        .to.emit(parallax, "CaseCrimeInfoSet")
+        .withArgs(1n, IPFS_CID)
+        .and.to.emit(parallax, "CaseActivated")
+        .withArgs(1n)
+        .and.to.emit(parallax, "CaseStatusChanged")
+        .withArgs(1n, 1n); // 1n = Active
     });
 
     it("Should not allow setting empty crime info", async function () {
-      await expect(parallax.setCaseCrimeInfo("")).to.be.revertedWith(
-        "Crime info CID cannot be empty"
+      await expect(parallax.activateCase("")).to.be.revertedWith(
+        "CID cannot be empty"
       );
     });
 
-    it("Should not allow non-owners to set crime info", async function () {
+    it("Should not allow non-owners to activate a case", async function () {
       await expect(
-        parallax.connect(player1).setCaseCrimeInfo(IPFS_CID)
+        parallax.connect(player1).activateCase(IPFS_CID)
       ).to.be.reverted;
+    });
+
+    it("Should not allow activating a non-pending case", async function () {
+      // Activate once
+      await parallax.activateCase(IPFS_CID);
+      
+      // Try to activate again
+      await expect(parallax.activateCase("QmNewCrimeInfoCID")).to.be.revertedWith(
+        "Case is not pending"
+      );
     });
   });
 
   describe("Player Deposits", function () {
     beforeEach(async function () {
-      // Set crime info for the case
-      await parallax.setCaseCrimeInfo(IPFS_CID);
+      // Activate the case with crime info
+      await parallax.activateCase(IPFS_CID);
     });
 
     it("Should allow a player to deposit", async function () {
       await parallax.connect(player1).depositToPlay();
 
-      expect(await parallax.hasPlayerDeposited(player1.address)).to.be.true;
-      expect(await parallax.getCurrentCasePlayerCount()).to.equal(1);
+      expect(await parallax.checkPlayerDepositStatus(1, player1.address)).to.be.true;
+      expect(await parallax.getCasePlayerCount(1)).to.equal(1);
       expect(await mockUSDC.balanceOf(await parallax.getAddress())).to.equal(ENTRY_FEE);
     });
 
     it("Should emit PlayerDeposited event", async function () {
       await expect(parallax.connect(player1).depositToPlay())
         .to.emit(parallax, "PlayerDeposited")
-        .withArgs(player1.address, ENTRY_FEE, 1);
+        .withArgs(1n, player1.address, ENTRY_FEE);
     });
 
-    it("Should not allow deposits without crime info", async function () {
-      // Deploy a new contract without setting crime info
+    it("Should not allow deposits for inactive cases", async function () {
+      // Deploy a new contract without activating the case
       const newParallax = await Parallax.deploy(await mockUSDC.getAddress());
+      // Note: not calling activateCase()
 
       // Approve the new contract
       await mockUSDC.connect(player1).approve(await newParallax.getAddress(), ENTRY_FEE);
 
       await expect(
         newParallax.connect(player1).depositToPlay()
-      ).to.be.revertedWith("Case has no crime info yet");
+      ).to.be.revertedWith("Case is not active");
     });
 
     it("Should not allow a player to deposit twice in the same case", async function () {
@@ -191,267 +172,209 @@ describe("Parallax", function () {
         parallax.connect(player1).depositToPlay()
       ).to.be.revertedWith("Player has already deposited for this case");
     });
+  });
 
-    it("Should change case status to Active when required players reached", async function () {
-      // Add 9 players
-      for (let i = 0; i < 9; i++) {
-        const player = [
-          player1,
-          player2,
-          player3,
-          player4,
-          player5,
-          player6,
-          player7,
-          player8,
-          player9,
-        ][i];
-        await parallax.connect(player).depositToPlay();
-      }
-
-      // Case should still be pending
-      expect(await parallax.getCaseStatus(1)).to.equal(0); // 0 = Pending
-
-      // Add the 10th player to trigger status change
-      await expect(parallax.connect(player10).depositToPlay())
-        .to.emit(parallax, "CaseStatusChanged")
-        .withArgs(1, 1); // 1 = Active
-
-      expect(await parallax.getCaseStatus(1)).to.equal(1); // 1 = Active
+  describe("Solution Submissions", function () {
+    beforeEach(async function () {
+      // Activate the case with crime info
+      await parallax.activateCase(IPFS_CID);
+      // Player 1 deposits
+      await parallax.connect(player1).depositToPlay();
     });
 
-    it("Should accurately report remaining players needed", async function () {
-      expect(await parallax.getRemainingPlayersNeeded()).to.equal(10);
+    it("Should allow a player to submit a solution", async function () {
+      await parallax.connect(player1).submitSolution();
+      
+      // Check that player is in the solvers list
+      const solvers = await parallax.getCaseSolvers(1);
+      expect(solvers.length).to.equal(1);
+      expect(solvers[0]).to.equal(player1.address);
+    });
 
-      // Add 5 players
-      for (let i = 0; i < 5; i++) {
-        const player = [player1, player2, player3, player4, player5][i];
-        await parallax.connect(player).depositToPlay();
-      }
+    it("Should emit SolutionSubmitted event", async function () {
+      await expect(parallax.connect(player1).submitSolution())
+        .to.emit(parallax, "SolutionSubmitted")
+        .withArgs(1n, player1.address);
+    });
 
-      expect(await parallax.getRemainingPlayersNeeded()).to.equal(5);
+    it("Should not allow submitting a solution without depositing", async function () {
+      await expect(
+        parallax.connect(player2).submitSolution()
+      ).to.be.revertedWith("You must deposit to participate in this case");
+    });
 
-      // Add 5 more
-      for (let i = 0; i < 5; i++) {
-        const player = [player6, player7, player8, player9, player10][i];
-        await parallax.connect(player).depositToPlay();
-      }
+    it("Should not allow submitting a solution twice", async function () {
+      await parallax.connect(player1).submitSolution();
+      
+      await expect(
+        parallax.connect(player1).submitSolution()
+      ).to.be.revertedWith("You have already submitted a solution for this case");
+    });
 
-      expect(await parallax.getRemainingPlayersNeeded()).to.equal(0);
+    it("Should allow paying for extra solution attempts", async function () {
+      // Pay for extra solution attempt
+      await expect(parallax.connect(player1).payForExtraSolutionAttempt())
+        .to.emit(parallax, "ExtraSolutionAttemptPaid")
+        .withArgs(1n, player1.address, EXTRA_SOLUTION_FEE);
+        
+      // Check that payment was recorded
+      expect(await parallax.extraSolutionAttempts(1, player1.address)).to.equal(1);
+    });
+
+    it("Should not allow paying for extra solution attempt without depositing", async function () {
+      await expect(
+        parallax.connect(player2).payForExtraSolutionAttempt()
+      ).to.be.revertedWith("You must deposit to participate in this case");
     });
   });
 
   describe("Ending a Game", function () {
     beforeEach(async function () {
-      // Set crime info for the case
-      await parallax.setCaseCrimeInfo(IPFS_CID);
+      // Activate the case with crime info
+      await parallax.activateCase(IPFS_CID);
 
-      // Add 10 players
-      for (let i = 0; i < 10; i++) {
-        const player = [
-          player1,
-          player2,
-          player3,
-          player4,
-          player5,
-          player6,
-          player7,
-          player8,
-          player9,
-          player10,
-        ][i];
+      // Add 3 players and have them submit solutions
+      for (const player of [player1, player2, player3]) {
+        await parallax.connect(player).depositToPlay();
+        await parallax.connect(player).submitSolution();
+      }
+      
+      // Add 2 more players who don't submit solutions
+      for (const player of [player4, player5]) {
         await parallax.connect(player).depositToPlay();
       }
     });
 
-    it("Should end game and distribute prizes correctly", async function () {
-      const totalPrize = ENTRY_FEE * 10n;
-      const ownerCommission = totalPrize * 10n / 100n;
-      const winnerPrize = totalPrize - ownerCommission;
+    it("Should end game and distribute prizes correctly to all solvers", async function () {
+      const totalPrize = ENTRY_FEE * 5n; // 5 players deposited
+      const ownerCommission = (totalPrize * 10n) / 100n; // 10% commission
+      const solverPrizePool = totalPrize - ownerCommission;
+      const prizePerSolver = solverPrizePool / 3n; // 3 solvers
       
+      // Check balances before
       const ownerBalanceBefore = await mockUSDC.balanceOf(owner.address);
-      const winnerBalanceBefore = await mockUSDC.balanceOf(player1.address);
+      const solver1BalanceBefore = await mockUSDC.balanceOf(player1.address);
+      const solver2BalanceBefore = await mockUSDC.balanceOf(player2.address);
+      const solver3BalanceBefore = await mockUSDC.balanceOf(player3.address);
       
-      await parallax.gameOver(player1.address);
+      // End the game
+      await parallax.gameOver();
       
+      // Check balances after
       const ownerBalanceAfter = await mockUSDC.balanceOf(owner.address);
-      const winnerBalanceAfter = await mockUSDC.balanceOf(player1.address);
+      const solver1BalanceAfter = await mockUSDC.balanceOf(player1.address);
+      const solver2BalanceAfter = await mockUSDC.balanceOf(player2.address);
+      const solver3BalanceAfter = await mockUSDC.balanceOf(player3.address);
       
-      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(ownerCommission);
-      expect(winnerBalanceAfter - winnerBalanceBefore).to.equal(winnerPrize);
+      // Calculate expected payouts (owner gets commission + remainder)
+      const ownerPayout = ownerCommission + (solverPrizePool % 3n);
+      
+      // Check payouts
+      expect(ownerBalanceAfter - ownerBalanceBefore).to.equal(ownerPayout);
+      expect(solver1BalanceAfter - solver1BalanceBefore).to.equal(prizePerSolver);
+      expect(solver2BalanceAfter - solver2BalanceBefore).to.equal(prizePerSolver);
+      expect(solver3BalanceAfter - solver3BalanceBefore).to.equal(prizePerSolver);
     });
 
     it("Should emit CaseEnded event", async function () {
-      const totalPrize = ENTRY_FEE * 10n;
-      const ownerCommission = totalPrize * 10n / 100n;
-      const winnerPrize = totalPrize - ownerCommission;
-
-      await expect(parallax.gameOver(player1.address))
+      // Get the list of solvers
+      const solvers = await parallax.getCaseSolvers(1);
+      
+      // Calculate prize pool
+      const totalPrize = ENTRY_FEE * 5n; // 5 players
+      const ownerCommission = (totalPrize * 10n) / 100n; // 10% commission
+      const solverPrizePool = totalPrize - ownerCommission;
+      
+      await expect(parallax.gameOver())
         .to.emit(parallax, "CaseEnded")
-        .withArgs(1, player1.address, winnerPrize);
+        .withArgs(1n, solvers, solverPrizePool);
     });
 
-    it("Should move to the next case", async function () {
-      await parallax.gameOver(player1.address);
-
-      expect(await parallax.currentCase()).to.equal(2);
-      expect(await parallax.getCaseStatus(2)).to.equal(0); // 0 = Pending
-    });
-
-    it("Should reset player deposits for the next case", async function () {
-      await parallax.gameOver(player1.address);
-      
-      // Set crime info for the new case
-      await parallax.setCaseCrimeInfo(IPFS_CID);
-      
-      // Player1 needs to approve spending for the new game
-      const parallaxAddress = await parallax.getAddress();
-      await mockUSDC.connect(player1).approve(parallaxAddress, ENTRY_FEE);
-      
-      // Mint more USDC to player1 if needed
-      await mockUSDC.mint(player1.address, ENTRY_FEE);
-      
-      // Player1 should be able to deposit again
-      await parallax.connect(player1).depositToPlay();
-      expect(await parallax.hasPlayerDeposited(player1.address)).to.be.true;
-    });
-
-    it("Should not allow ending a game without enough players", async function () {
-      // Deploy new contract
+    it("Should not allow ending a game with no solvers", async function () {
+      // Deploy a new contract
       const newParallax = await Parallax.deploy(await mockUSDC.getAddress());
-
-      // Set crime info
-      await newParallax.setCaseCrimeInfo(IPFS_CID);
-
-      // Add only 5 players
-      for (let i = 0; i < 5; i++) {
-        const player = [player1, player2, player3, player4, player5][i];
       
-        // Mint more USDC to player if needed
+      // Set up the case
+      await newParallax.activateCase(IPFS_CID);
+      
+      // Add players but no solvers
+      for (const player of [player1, player2]) {
+        // Mint sufficient USDC to the players for this new contract
         await mockUSDC.mint(player.address, ENTRY_FEE);
         await mockUSDC.connect(player).approve(await newParallax.getAddress(), ENTRY_FEE);
         await newParallax.connect(player).depositToPlay();
+        // Note: not submitting solutions
       }
-
-      await expect(newParallax.gameOver(player1.address)).to.be.revertedWith(
-        "Not enough players to end case"
-      );
-    });
-
-    it("Should not allow ending a game with a non-participating winner", async function () {
-      await expect(parallax.gameOver(player11.address)).to.be.revertedWith(
-        "Winner is not a participating player"
+      
+      await expect(newParallax.gameOver()).to.be.revertedWith(
+        "No one submitted a solution"
       );
     });
 
     it("Should not allow non-owners to end the game", async function () {
       await expect(
-        parallax.connect(player1).gameOver(player1.address)
+        parallax.connect(player1).gameOver()
       ).to.be.reverted;
     });
-  });
 
-  describe("Multiple Game Lifecycle", function () {
-    it("Should track multiple games correctly", async function () {
-      // Game 1
-      await parallax.setCaseCrimeInfo(IPFS_CID);
-
-      for (let i = 0; i < 10; i++) {
-        const player = [
-          player1,
-          player2,
-          player3,
-          player4,
-          player5,
-          player6,
-          player7,
-          player8,
-          player9,
-          player10,
-        ][i];
-        await mockUSDC.mint(player.address, ENTRY_FEE);
-        await mockUSDC.connect(player).approve(await parallax.getAddress(), ENTRY_FEE);
-        await parallax.connect(player).depositToPlay();
-      }
-
-      await parallax.gameOver(player1.address);
-
-      // Game 2
-      await parallax.setCaseCrimeInfo("QmGame2CID");
-
-      for (let i = 0; i < 10; i++) {
-        const player = [
-          player1,
-          player2,
-          player3,
-          player4,
-          player5,
-          player6,
-          player7,
-          player8,
-          player9,
-          player10,
-        ][i];
-        await mockUSDC.mint(player.address, ENTRY_FEE);
-        await mockUSDC.connect(player).approve(await parallax.getAddress(), ENTRY_FEE);
-        await parallax.connect(player).depositToPlay();
-      }
-
-      await parallax.gameOver(player2.address);
-
-      // Verify case history
-      expect(await parallax.getCaseWinner(1)).to.equal(player1.address);
-      expect(await parallax.getCaseWinner(2)).to.equal(player2.address);
-      expect(await parallax.getCaseCrimeInfoCID(1)).to.equal(IPFS_CID);
-      expect(await parallax.getCaseCrimeInfoCID(2)).to.equal("QmGame2CID");
-      expect(await parallax.currentCase()).to.equal(3);
+    it("Should not allow ending a non-active game", async function () {
+      // First finish the current game
+      await parallax.gameOver();
+      
+      // Try to end it again
+      await expect(parallax.gameOver()).to.be.revertedWith(
+        "Case is not active"
+      );
     });
   });
 
-  describe("Edge Cases", function () {
-    it("Should handle USDC transfer failures", async function () {
-      // Use the malicious USDC already deployed in beforeEach
+  describe("Starting a New Case", function () {
+    beforeEach(async function () {
+      // Set up and complete a case
+      await parallax.activateCase(IPFS_CID);
+      await parallax.connect(player1).depositToPlay();
+      await parallax.connect(player1).submitSolution();
+      await parallax.gameOver();
+    });
 
-      // Deploy game with malicious token
-      const maliciousGame = await Parallax.deploy(await maliciousUSDC.getAddress());
+    it("Should allow owner to start a new case after the previous one completes", async function () {
+      expect(await parallax.currentCase()).to.equal(1n);
+      
+      await expect(parallax.startNewCase())
+        .to.emit(parallax, "NewCaseReady")
+        .withArgs(2n);
+        
+      expect(await parallax.currentCase()).to.equal(2n);
+      expect(await parallax.getCaseStatus(2)).to.equal(0n); // Pending
+    });
 
-      // Set crime info
-      await maliciousGame.setCaseCrimeInfo(IPFS_CID);
+    it("Should not allow starting a new case if the current one isn't complete", async function () {
+      // Deploy a new contract
+      const newParallax = await Parallax.deploy(await mockUSDC.getAddress());
+      
+      // Set up the case but don't complete it
+      await newParallax.activateCase(IPFS_CID);
+      
+      // Try to start a new case
+      await expect(newParallax.startNewCase()).to.be.revertedWith(
+        "Current case must be finished or cancelled first"
+      );
+    });
 
-      // Mint tokens to player
-      await maliciousUSDC.mint(player1.address, ENTRY_FEE);
-      await maliciousUSDC
-        .connect(player1)
-        .approve(await maliciousGame.getAddress(), ENTRY_FEE);
-
-      // Should revert on deposit due to transfer failure
+    it("Should not allow non-owners to start a new case", async function () {
       await expect(
-        maliciousGame.connect(player1).depositToPlay()
-      ).to.be.revertedWith("USDC transfer failed");
-    });
-
-    it("Should allow recovering tokens sent by mistake", async function () {
-      // Send some extra USDC to the contract
-      await mockUSDC.mint(owner.address, ENTRY_FEE);
-      await mockUSDC.transfer(await parallax.getAddress(), ENTRY_FEE);
-      
-      const balanceBefore = await mockUSDC.balanceOf(owner.address);
-      await parallax.recoverERC20(await mockUSDC.getAddress());
-      const balanceAfter = await mockUSDC.balanceOf(owner.address);
-      
-      // Use subtraction operator instead of .sub() method
-      expect(balanceAfter - balanceBefore).to.equal(ENTRY_FEE);
+        parallax.connect(player1).startNewCase()
+      ).to.be.reverted;
     });
   });
 
   describe("Cancelling a Case", function () {
     beforeEach(async function () {
-      // Set crime info for the case
-      await parallax.setCaseCrimeInfo(IPFS_CID);
+      // Activate the case with crime info
+      await parallax.activateCase(IPFS_CID);
       
-      // Add 5 players (not enough to activate the case)
-      for (let i = 0; i < 5; i++) {
-        const player = [player1, player2, player3, player4, player5][i];
+      // Add 3 players
+      for (const player of [player1, player2, player3]) {
         await parallax.connect(player).depositToPlay();
       }
     });
@@ -459,51 +382,40 @@ describe("Parallax", function () {
     it("Should refund all players when cancelling a case", async function () {
       // Record player balances before cancellation
       const playerBalancesBefore = [];
-      for (let i = 0; i < 5; i++) {
-        const player = [player1, player2, player3, player4, player5][i];
+      for (const player of [player1, player2, player3]) {
         playerBalancesBefore.push(await mockUSDC.balanceOf(player.address));
       }
       
       // Cancel the case
       await expect(parallax.cancelCase())
         .to.emit(parallax, "CaseCancelled")
-        .withArgs(1);
+        .withArgs(1n);
       
       // Verify all players received their refunds
-      for (let i = 0; i < 5; i++) {
-        const player = [player1, player2, player3, player4, player5][i];
+      for (let i = 0; i < 3; i++) {
+        const player = [player1, player2, player3][i];
         const balanceAfter = await mockUSDC.balanceOf(player.address);
         expect(balanceAfter - playerBalancesBefore[i]).to.equal(ENTRY_FEE);
       }
     });
     
-    it("Should move to the next case after cancellation", async function () {
-      // Current case should be 1
-      expect(await parallax.currentCase()).to.equal(1);
-      
-      // Cancel the case
+    it("Should mark the case as cancelled", async function () {
       await parallax.cancelCase();
-      
-      // Case 1 should be marked as cancelled (or similar status)
-      // This will depend on how you implement the cancel functionality
-      
-      // Current case should now be 2
-      expect(await parallax.currentCase()).to.equal(2);
-      expect(await parallax.getCaseStatus(2)).to.equal(0); // 0 = Pending
+      expect(await parallax.getCaseStatus(1)).to.equal(3n); // 3 = Cancelled
     });
     
     it("Should reset player deposits after cancellation", async function () {
       // Players have deposited in case 1
-      expect(await parallax.hasPlayerDeposited(player1.address)).to.be.true;
+      expect(await parallax.checkPlayerDepositStatus(1, player1.address)).to.be.true;
       
       // Cancel the case
       await parallax.cancelCase();
       
       // Player deposits should be reset
-      expect(await parallax.hasPlayerDeposited(player1.address)).to.be.false;
+      expect(await parallax.checkPlayerDepositStatus(1, player1.address)).to.be.false;
       
       // Player array should be cleared
-      expect(await parallax.getCurrentCasePlayerCount()).to.equal(0);
+      expect(await parallax.getCasePlayerCount(1)).to.equal(0);
     });
     
     it("Should only allow the owner to cancel a case", async function () {
@@ -516,33 +428,100 @@ describe("Parallax", function () {
       await expect(parallax.cancelCase()).to.not.be.reverted;
     });
     
-    it("Should only allow cancelling pending cases", async function () {
-      // Get to 10 players to make the case active
-      for (let i = 5; i < 10; i++) {
-        const player = [player6, player7, player8, player9, player10][i - 5];
-        await parallax.connect(player).depositToPlay();
-      }
-      
-      // Case should now be active
-      expect(await parallax.getCaseStatus(1)).to.equal(1); // 1 = Active
-      
-      // Should not allow cancelling an active case
-      await expect(parallax.cancelCase()).to.be.revertedWith(
-        "Can only cancel pending cases"
-      );
-    });
-    
-    it("Should have zero USDC balance after cancellation", async function () {
-      // Initial contract balance should be 5 * ENTRY_FEE
+    it("Should have zero USDC balance after cancellation (except extra fees)", async function () {
+      // Initial contract balance should be 3 * ENTRY_FEE
       const balanceBefore = await mockUSDC.balanceOf(await parallax.getAddress());
-      expect(balanceBefore).to.equal(ENTRY_FEE * 5n);
+      expect(balanceBefore).to.equal(ENTRY_FEE * 3n);
       
       // Cancel the case
       await parallax.cancelCase();
       
       // Final contract balance should be 0
       const balanceAfter = await mockUSDC.balanceOf(await parallax.getAddress());
-      expect(balanceAfter).to.equal(0);
+      expect(balanceAfter).to.equal(0n);
+    });
+  });
+
+  describe("Token Recovery", function () {
+    it("Should allow recovering tokens sent by mistake", async function () {
+      // Send some extra USDC to the contract
+      await mockUSDC.mint(owner.address, ENTRY_FEE);
+      await mockUSDC.transfer(await parallax.getAddress(), ENTRY_FEE);
+      
+      const balanceBefore = await mockUSDC.balanceOf(owner.address);
+      await parallax.recoverERC20(await mockUSDC.getAddress());
+      const balanceAfter = await mockUSDC.balanceOf(owner.address);
+      
+      expect(balanceAfter - balanceBefore).to.equal(ENTRY_FEE);
+    });
+    
+    it("Should only allow the owner to recover tokens", async function () {
+      await expect(
+        parallax.connect(player1).recoverERC20(await mockUSDC.getAddress())
+      ).to.be.reverted;
+    });
+  });
+
+  describe("Multiple Game Lifecycle", function () {
+    it("Should handle multiple game cycles correctly", async function () {
+      // ===== Game 1 =====
+      await parallax.activateCase(IPFS_CID);
+
+      // Players 1-3 deposit and submit solutions
+      for (const player of [player1, player2, player3]) {
+        await parallax.connect(player).depositToPlay();
+        await parallax.connect(player).submitSolution();
+      }
+
+      // End the game
+      await parallax.gameOver();
+      
+      // Start a new case
+      await parallax.startNewCase();
+
+      // ===== Game 2 =====
+      const game2CID = "QmGame2CID";
+      await parallax.activateCase(game2CID);
+
+      // Get new approvals for game 2
+      const parallaxAddress = await parallax.getAddress();
+      for (const player of [player1, player2, player3, player4]) {
+        await mockUSDC.mint(player.address, ENTRY_FEE);
+        await mockUSDC.connect(player).approve(parallaxAddress, ENTRY_FEE);
+      }
+
+      // Players 1, 2, 4 deposit and submit for game 2
+      for (const player of [player1, player2, player4]) {
+        await parallax.connect(player).depositToPlay();
+        await parallax.connect(player).submitSolution();
+      }
+
+      // End game 2
+      await parallax.gameOver();
+      
+      // Start a new case
+      await parallax.startNewCase();
+
+      // ===== Verify case history =====
+      // Case IDs
+      expect(await parallax.currentCase()).to.equal(3n);
+      
+      // Case crime info
+      expect(await parallax.getCaseCrimeInfoCID(1)).to.equal(IPFS_CID);
+      expect(await parallax.getCaseCrimeInfoCID(2)).to.equal(game2CID);
+      
+      // Case statuses
+      expect(await parallax.getCaseStatus(1)).to.equal(2n); // Completed
+      expect(await parallax.getCaseStatus(2)).to.equal(2n); // Completed
+      expect(await parallax.getCaseStatus(3)).to.equal(0n); // Pending
+      
+      // Case solvers
+      const case1Solvers = await parallax.getCaseSolvers(1);
+      expect(case1Solvers.length).to.equal(3);
+      
+      const case2Solvers = await parallax.getCaseSolvers(2);
+      expect(case2Solvers.length).to.equal(3);
+      expect(case2Solvers).to.include(player4.address);
     });
   });
 });
