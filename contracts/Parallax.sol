@@ -124,25 +124,25 @@ contract Parallax is Ownable, ReentrancyGuard {
      * @dev Allow a player who has deposited to submit a solution to the current case.
      * Case must be Active. Only one submission allowed per player per case.
      */
-    function submitSolution() external nonReentrant {
+    function submitSolution(address player) public onlyOwner {
         uint256 caseNum = currentCase;
         require(
             caseStatus[caseNum] == CaseStatus.Active,
             "Case is not active"
         );
         require(
-            hasPlayerDeposited[caseNum][msg.sender],
-            "You must deposit to participate in this case"
+            hasPlayerDeposited[caseNum][player],
+            "Player has not deposited"
         );
         require(
-            !hasPlayerSolved[caseNum][msg.sender],
-            "You have already submitted a solution for this case"
+            !hasPlayerSolved[caseNum][player],
+            "Player has already submitted a solution for this case"
         );
 
-        caseSolvers[caseNum].push(msg.sender);
-        hasPlayerSolved[caseNum][msg.sender] = true;
+        caseSolvers[caseNum].push(player);
+        hasPlayerSolved[caseNum][player] = true;
 
-        emit SolutionSubmitted(caseNum, msg.sender);
+        emit SolutionSubmitted(caseNum, player);
     }
 
     /**

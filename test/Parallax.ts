@@ -182,8 +182,8 @@ describe("Parallax", function () {
       await parallax.connect(player1).depositToPlay();
     });
 
-    it("Should allow a player to submit a solution", async function () {
-      await parallax.connect(player1).submitSolution();
+    it("Should allow owner to submit a solution for a player", async function () {
+      await parallax.submitSolution(player1.address);
       
       // Check that player is in the solvers list
       const solvers = await parallax.getCaseSolvers(1);
@@ -192,23 +192,29 @@ describe("Parallax", function () {
     });
 
     it("Should emit SolutionSubmitted event", async function () {
-      await expect(parallax.connect(player1).submitSolution())
+      await expect(parallax.submitSolution(player1.address))
         .to.emit(parallax, "SolutionSubmitted")
         .withArgs(1n, player1.address);
     });
 
-    it("Should not allow submitting a solution without depositing", async function () {
+    it("Should not allow submitting a solution for a player who hasn't deposited", async function () {
       await expect(
-        parallax.connect(player2).submitSolution()
-      ).to.be.revertedWith("You must deposit to participate in this case");
+        parallax.submitSolution(player2.address)
+      ).to.be.revertedWith("Player has not deposited");
     });
 
-    it("Should not allow submitting a solution twice", async function () {
-      await parallax.connect(player1).submitSolution();
+    it("Should not allow submitting a solution twice for the same player", async function () {
+      await parallax.submitSolution(player1.address);
       
       await expect(
-        parallax.connect(player1).submitSolution()
-      ).to.be.revertedWith("You have already submitted a solution for this case");
+        parallax.submitSolution(player1.address)
+      ).to.be.revertedWith("Player has already submitted a solution for this case");
+    });
+
+    it("Should not allow non-owners to submit solutions", async function () {
+      await expect(
+        parallax.connect(player1).submitSolution(player1.address)
+      ).to.be.reverted;
     });
 
     it("Should allow paying for extra solution attempts", async function () {
@@ -233,10 +239,11 @@ describe("Parallax", function () {
       // Activate the case with crime info
       await parallax.activateCase(IPFS_CID);
 
-      // Add 3 players and have them submit solutions
+      // Add 3 players
       for (const player of [player1, player2, player3]) {
         await parallax.connect(player).depositToPlay();
-        await parallax.connect(player).submitSolution();
+        // Owner submits solutions for players
+        await parallax.submitSolution(player.address);
       }
       
       // Add 2 more players who don't submit solutions
@@ -333,7 +340,7 @@ describe("Parallax", function () {
       // Set up and complete a case
       await parallax.activateCase(IPFS_CID);
       await parallax.connect(player1).depositToPlay();
-      await parallax.connect(player1).submitSolution();
+      await parallax.submitSolution(player1.address);
       await parallax.gameOver();
     });
 
@@ -467,10 +474,10 @@ describe("Parallax", function () {
       // ===== Game 1 =====
       await parallax.activateCase(IPFS_CID);
 
-      // Players 1-3 deposit and submit solutions
+      // Players 1-3 deposit and owner submits solutions for them
       for (const player of [player1, player2, player3]) {
         await parallax.connect(player).depositToPlay();
-        await parallax.connect(player).submitSolution();
+        await parallax.submitSolution(player.address);
       }
 
       // End the game
@@ -490,10 +497,10 @@ describe("Parallax", function () {
         await mockUSDC.connect(player).approve(parallaxAddress, ENTRY_FEE);
       }
 
-      // Players 1, 2, 4 deposit and submit for game 2
+      // Players 1, 2, 4 deposit and owner submits solutions for them
       for (const player of [player1, player2, player4]) {
         await parallax.connect(player).depositToPlay();
-        await parallax.connect(player).submitSolution();
+        await parallax.submitSolution(player.address);
       }
 
       // End game 2

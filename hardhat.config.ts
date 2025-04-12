@@ -16,6 +16,22 @@ const config: HardhatUserConfig = {
   },
   networks: {
     hardhat: {
+      // Enable mining mode
+      mining: {
+        auto: true,
+        interval: 0 // Mine immediately when transactions are received
+      },
+      // Enable websocket support for event testing
+      allowUnlimitedContractSize: true,
+      blockGasLimit: 100000000,
+    },
+    localhost: {
+      url: "http://127.0.0.1:8545",
+      chainId: 31337,
+      // Add WebSocket support
+      accounts: {
+        mnemonic: "test test test test test test test test test test test junk"
+      }
     },
     base: {
       url: "https://base-mainnet.g.alchemy.com/v2/KuIgY2Ie6n37U-OhbtAQKWfQ_DJv9iaA", 
